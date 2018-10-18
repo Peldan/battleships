@@ -5,6 +5,8 @@ black = [0, 0, 0]
 white = [190, 190, 190]
 red = [255, 0, 0]
 shipPositions = []
+sunken_player_ships = 0
+shipSizes = []
 
 def init():
     pygame.init()
@@ -44,11 +46,11 @@ def gameLoop(gameArea, shipAreaRect, screen, matrix, availableShips, shipFont, e
     hits_by_player = []
     hits_by_enemy = []
     shoot_ticks = 0
-    while True:
+    while sunken_player_ships < len(availableShips) and enemy.sunken_enemy_ships < len(enemy.enemyships):
         screen.fill(black, gameArea.rect)
         screen.fill(white, shipAreaRect)
         if not players_turn:
-            enemy_shoot(gameArea, enemy, hits_by_enemy, matrix)
+            enemy_shoot(gameArea, enemy, hits_by_enemy, matrix, availableShips)
             players_turn = True
         if hovered_rect != None:
             screen.fill((50, 50, 50), hovered_rect)
@@ -79,9 +81,15 @@ def gameLoop(gameArea, shipAreaRect, screen, matrix, availableShips, shipFont, e
                     pygame.mouse.set_cursor(*pygame.cursors.arrow)
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if movingship and gameArea.rect.collidepoint(pygame.mouse.get_pos()):
-                    movingship = False
-                    place_ship(gameArea, chosenship, matrix)
-                    placed_ships+=1
+                    temp_rect = pygame.Rect(pygame.mouse.get_pos()[0], pygame.mouse.get_pos()[1], chosenship.width, chosenship.height)
+                    for ship in availableShips:
+                        while ship != chosenship and temp_rect.colliderect(ship.rect):
+                            print("Finns redan ett skepp här")
+                            
+                    if gameArea.rect.contains(temp_rect):
+                        movingship = False
+                        place_ship(gameArea, chosenship, matrix, shipinitialx, shipinitialy)
+                        placed_ships+=1
                 elif not gameArea.rect.collidepoint(pygame.mouse.get_pos()):
                     movingship = False
                     for ship in availableShips:
@@ -95,8 +103,13 @@ def gameLoop(gameArea, shipAreaRect, screen, matrix, availableShips, shipFont, e
                     players_turn and int(pygame.mouse.get_pos()[1] / 25) < int((gameArea.height / 2) / 25) and placed_ships == len(availableShips):
                     clicked_column = int(pygame.mouse.get_pos()[0] / 25)
                     clicked_row = int(pygame.mouse.get_pos()[1] / 25)
-                    if [clicked_column, clicked_row] not in missed_shots:
+                    if [clicked_column, clicked_row] not in missed_shots and [clicked_column, clicked_row] not in hits_by_player:
                         if matrix[clicked_column][clicked_row] == 1:
+                            for ship in enemy.enemyships:
+                                if ship.rect.collidepoint(clicked_column*25, clicked_row*25):
+                                    ship.was_hit()
+                                    if ship.did_sink():
+                                        enemy.sunken_enemy_ships += 1
                             hits_by_player.append([clicked_column, clicked_row])
                         else:
                             missed_shots.append([clicked_column, clicked_row])
@@ -109,7 +122,8 @@ def gameLoop(gameArea, shipAreaRect, screen, matrix, availableShips, shipFont, e
         screen.blit(shipFont.render("Fartyg", 1, black), shipAreaRect)
         pygame.display.flip()
 
-def place_ship(gameArea, chosenship, matrix):
+
+def place_ship(gameArea, chosenship, matrix, shipinitialx, shipinitialy):
     column = int(chosenship.x / 25)
     row = int(chosenship.y / 25)
     if chosenship.y < gameArea.height / 2:
@@ -130,18 +144,23 @@ def draw_grid(gameArea, screen, matrix):
             else:
                 screen.fill((50, 50, 50), [0, y*25, gameArea.width, 1])
 
-def enemy_shoot(gameArea, enemy, hits_by_enemy, matrix):
-    shot = enemy.shoot(gameArea.width, gameArea.height)
-    if shot == None or shot[0] == None or shot[1] == None:
-        enemy.new_random_shot(gameArea.width, gameArea.height)
+def enemy_shoot(gameArea, enemy, hits_by_enemy, matrix, availableShips):
+    shot = enemy.shoot(gameArea.width, gameArea.height, matrix)
+    if shot == None or shot[0] == None or shot[1] == None \
+        or matrix[shot[0]][shot[1]] == 'X':
+        enemy.new_random_shot(gameArea.width, gameArea.height, matrix)
     else:
-        print("Motståndaren sköt på ", shot[0], shot[1])
         if matrix[shot[0]][shot[1]] == 1:
             hits_by_enemy.append([shot[0], shot[1]])
-            print("Motståndaren träffade")
+            for ship in availableShips:
+                if ship.rect.collidepoint((shot[0]*25, shot[1]*25)):
+                    ship.was_hit()
+                    if ship.did_sink():
+                        sunken_player_ships += 1
             enemy.did_hit(True)
         else:
             enemy.did_hit(False)
+        matrix[shot[0]][shot[1]] = "X"
 
 def drawShips(availableShips, screen, gameAreaWidth):
     for i in range(len(availableShips)):
@@ -155,6 +174,7 @@ def makeShips(gameAreaWidth, gameAreaHeight, is_enemy, matrix):
         width = 1*math.sqrt(gameAreaWidth)
         height = randint(2, 5)*math.sqrt(gameAreaHeight)
         if is_enemy:
+            height = shipSizes[i]
             x = randint(0, int(gameAreaWidth) - width)
             y = randint(0, int(gameAreaHeight / 2) - height)
             column = int(math.ceil(x / 25))
@@ -178,6 +198,7 @@ def makeShips(gameAreaWidth, gameAreaHeight, is_enemy, matrix):
         else:
             x = gameAreaWidth + offsetx
             y = 0 + offsety
+        shipSizes.append(height)
         ship = Ship(x, y, width, height)
         availableShips.append(ship)
         offsetx += 27
@@ -187,6 +208,7 @@ class Enemy:
     enemyships = []
     previous_shots = [] # index: 0 = x, 1 = y, 2 = did_hit, 3 = negative or positive y-direction from last shot (-1 or 1)
     next_shot = None
+    sunken_enemy_ships = 0
     w = 0
     h = 0
     x = 0
@@ -199,7 +221,7 @@ class Enemy:
         if did_hit:
             self.previous_shots[len(self.previous_shots) - 1][2] = True
 
-    def shoot(self, gameAreaWidth, gameAreaHeight):
+    def shoot(self, gameAreaWidth, gameAreaHeight, matrix):
         x = randint(0, int(gameAreaWidth - 25))
         y = randint(int((gameAreaHeight - 25) / 2), int(gameAreaHeight - 25))
         self.x = x
@@ -209,11 +231,11 @@ class Enemy:
         previous_shot = self.previous_shots[len(self.previous_shots) - 1] if len(self.previous_shots) >= 1 else None
         previous_previous_shot = self.previous_shots[len(self.previous_shots) - 2] if len(self.previous_shots) >= 2 else None
         if previous_shot != None and previous_shot[2] == False and previous_previous_shot != None and previous_previous_shot[2] == True:
-            return self.hit_streak_ended_shot(previous_previous_shot)
+            return self.hit_streak_ended_shot(previous_previous_shot, matrix)
         elif previous_shot != None and previous_shot[2] == True:
             return self.hit_last_shot()
         else:
-            return self.randomized_shot()
+            return self.randomized_shot(matrix)
 
     def hit_last_shot(self):
         column = self.previous_shots[len(self.previous_shots) - 1][0]
@@ -229,7 +251,7 @@ class Enemy:
                 return[column, new_row]
             self.previous_shots[len(self.previous_shots) - 2][3] = negpos
 
-    def hit_streak_ended_shot(self, previous_previous_shot):
+    def hit_streak_ended_shot(self, previous_previous_shot, matrix):
         column = self.previous_shots[len(self.previous_shots) - 2][0]
         beforelast_row = self.previous_shots[len(self.previous_shots) - 2][1]
         if beforelast_row > 0 and beforelast_row < math.sqrt(self.h) - 1:
@@ -239,26 +261,70 @@ class Enemy:
                 self.previous_shots.append([column, new_row, False, negpos])
                 return[column, new_row]
             else:
-                return self.randomized_shot()
+                return self.randomized_shot(matrix)
 
-    def randomized_shot(self):
+    def randomized_shot(self, matrix):
         x = self.x
         y = self.y
-        column = int(math.ceil(self.x / 25))
+        column = None
         row = int(math.ceil(self.y / 25))
-        while self.has_shot_here(column, row):
-            x = randint(0, int(self.w - 25))
-            y = randint(int((self.h / 2) - 25), int(self.h - 25))
-            column = int(math.ceil(x / 25))
-            row = int(math.ceil(y / 25))
-        self.previous_shots.append([column, row, False, 0])
-        return [column, row]
+        if len(self.previous_shots) > 5:
+            blindspots_per_column = self.calc_most_probable(matrix)
+            if len(blindspots_per_column) > 0:
+                best = blindspots_per_column[0]
+                for i in range(len(blindspots_per_column)):
+                    if blindspots_per_column[i]['Value'] > best['Value']:
+                        best = blindspots_per_column[i]
+                column = best['Column']
+                while self.has_shot_here(column, row):
+                    column += choice((-1, 1))
+                self.previous_shots.append([column, row, False, 0])
+            else:
+                column = int(math.ceil(self.x / 25))
+                while self.has_shot_here(column, row):
+                    x = randint(0, int(self.w - 25))
+                    y = randint(int((self.h / 2) - 25), int(self.h - 25))
+                    column = int(math.ceil(x / 25))
+                    row = int(math.ceil(y / 25))
+            return [column, row]
+        else:
+            column = int(math.ceil(self.x / 25))
+            while self.has_shot_here(column, row):
+                x = randint(0, int(self.w - 25))
+                y = randint(int((self.h / 2) - 25), int(self.h - 25))
+                column = int(math.ceil(x / 25))
+                row = int(math.ceil(y / 25))
+            self.previous_shots.append([column, row, False, 0])
+            return [column, row]
 
-    def new_random_shot(self, gameAreaWidth, gameAreaHeight):
+    def calc_most_probable(self, matrix):
+        columns = []
+        for i in range(len(matrix)):
+            cnt = 0
+            biggest_val = 0
+            hits_on_row = 0
+            for j in range(13, len(matrix[i])):
+                if matrix[i][j] == 0 or matrix[i][j] == 1:
+                    cnt+=1
+                else:
+                    hits_on_row += 1
+                    if cnt > biggest_val:
+                        biggest_val = cnt
+                    cnt = 0
+                if j == len(matrix) - 1 and biggest_val == 0:
+                    biggest_val = cnt
+            if hits_on_row == 0:
+                biggest_val = 25
+            if biggest_val > 2:
+                entry = {'Column': i, 'Value': biggest_val}
+                columns.append(entry)
+        return columns
+
+    def new_random_shot(self, gameAreaWidth, gameAreaHeight, matrix):
         self.previous_shots[len(self.previous_shots) - 2][2] = False
         self.previous_shots[len(self.previous_shots) - 2][3] = None
         self.previous_shots[2] = False
-        return self.randomized_shot()
+        return self.randomized_shot(matrix)
 
     def has_shot_here(self, column, row):
         if [column, row, False, -1] in self.previous_shots or [column, row, True, 1] in self.previous_shots \
@@ -295,6 +361,8 @@ class Ship:
     width = 0
     height = 0
     rect = None
+    hit_tiles = 0
+    sunk = False
     def __init__(self, x, y, width, height):
         self.x = x
         self.y = y
@@ -307,4 +375,11 @@ class Ship:
     def update_y(self, y):
         self.y = y
         self.rect.y = self.y
+    def was_hit(self):
+        self.hit_tiles += 1
+        if self.hit_tiles == self.height:
+            self.sunk = True
+    def did_sink(self):
+        return self.sunk
+
 init()
